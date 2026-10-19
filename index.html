@@ -747,7 +747,7 @@ html, body { background-color: transparent !important; background-image: none !i
   <a class="drawer-menu-item" id="drawer-servicesTab" onclick="navigateFromDrawer('servicesTab')"><i class="fa-solid fa-concierge-bell"></i> Services</a>
   <a class="drawer-menu-item" id="drawer-expenseTab" onclick="navigateFromDrawer('expenseTab')"><i class="fa-solid fa-receipt"></i> Shop Expenses</a>
   <a class="drawer-menu-item" id="drawer-transferTab" onclick="navigateFromDrawer('transferTab')"><i class="fa-solid fa-right-left"></i> Bank & Drawer Transfer Ledger</a>
-  <a class="drawer-menu-item" id="drawer-invoiceTab" onclick="navigateFromDrawer('invoiceTab')"><i class="fa-solid fa-file-invoice"></i> CSC Invoice Generator</a>
+  <a class="drawer-menu-item" id="drawer-invoiceTab" onclick="navigateFromDrawer('invoiceTab')"><i class="fa-solid fa-file-invoice"></i> Invoice Generator</a>
   <a class="drawer-menu-item" id="drawer-reportsTab" onclick="navigateFromDrawer('reportsTab')"><i class="fa-solid fa-file-invoice-dollar"></i> Financial Reports</a>
   <a class="drawer-menu-item" id="drawer-adminTab" style="display: none;" onclick="navigateFromDrawer('adminTab')"><i class="fa-solid fa-user-shield"></i> Admin Controls</a>
   <a class="drawer-menu-item" id="drawer-hrTab" onclick="navigateFromDrawer('hrTab')"><i class="fa-solid fa-id-card-clip"></i> HR Management</a>
@@ -1012,7 +1012,7 @@ html, body { background-color: transparent !important; background-image: none !i
   <button class="tab-btn" id="btn-servicesTab" onclick="switchTab('servicesTab', this)">Services</button>
   <button class="tab-btn" id="btn-expenseTab" onclick="switchTab('expenseTab', this)">Shop Expenses</button>
   <button class="tab-btn" id="btn-transferTab" onclick="switchTab('transferTab', this)">Bank & Drawer Transfer Ledger</button>
-  <button class="tab-btn" id="btn-invoiceTab" onclick="switchTab('invoiceTab', this)">CSC Invoice</button>
+  <button class="tab-btn" id="btn-invoiceTab" onclick="switchTab('invoiceTab', this)">Invoice</button>
   <button class="tab-btn" id="btn-reportsTab" onclick="switchTab('reportsTab', this)">Financial Reports</button>
   <button class="tab-btn" id="btn-adminTab" style="display: none;" onclick="switchTab('adminTab', this)">Admin Controls</button>
   <button class="tab-btn" id="btn-hrTab" onclick="switchTab('hrTab', this)">HR Management</button>
@@ -1709,7 +1709,7 @@ html, body { background-color: transparent !important; background-image: none !i
 
   </div>
 
-  <!-- TAB 5: CSC INVOICE GENERATOR -->
+  <!-- TAB 5: INVOICE GENERATOR -->
   <div id="invoiceTab" class="tab-content">
     
     <div class="section-header no-print invoice-header"><i class="fa-solid fa-file-invoice"></i> Invoice Generator
@@ -2345,6 +2345,11 @@ html, body { background-color: transparent !important; background-image: none !i
         <div class="form-group">
           <label>Firebase Database URL</label>
           <input type="text" id="firebaseDbUrlInput" placeholder="Enter the Firebase database URL">
+        </div>
+        <div class="form-group">
+          <label>Firebase Web API Key</label>
+          <input type="text" id="firebaseApiKeyInput" placeholder="Enter the Firebase Web API Key (apiKey)">
+          <p style="font-size:.72rem;color:var(--text-muted);margin-top:6px">Required for Cloud Sync and secure sign-in. Saved on this device only and preserved across app updates.</p>
         </div>
         <button class="btn-primary" onclick="saveFirebaseSettings()" style="width: auto;"><i class="fa-solid fa-plug"></i> Connect & Sync Cloud Database</button>
       </div>
@@ -3378,6 +3383,9 @@ const FIREBASE_CONFIG = {
     const savedUrl = localStorage.getItem('ATMOS_FIREBASE_URL') || FIREBASE_CONFIG.databaseURL;
     var urlInput = document.getElementById('firebaseDbUrlInput');
     if (savedUrl && urlInput) urlInput.value = savedUrl;
+    var savedKey = localStorage.getItem('ATMOS_FIREBASE_KEY') || '';
+    var keyInput = document.getElementById('firebaseApiKeyInput');
+    if (savedKey && keyInput) keyInput.value = savedKey;
   }
 
   function convertToLegacyFormat() {
@@ -4074,9 +4082,19 @@ const FIREBASE_CONFIG = {
   /* FIREBASE REAL-TIME CROSS-DEVICE LIVE SYNC (same production database as the previous version) */
   function setupFirebaseSync() {
     const customUrl = localStorage.getItem('ATMOS_FIREBASE_URL');
+    const customKey = localStorage.getItem('ATMOS_FIREBASE_KEY');
     try {
+      var fbCfg = Object.assign({}, FIREBASE_CONFIG);
+      if (customUrl) fbCfg.databaseURL = customUrl;
+      if (customKey) fbCfg.apiKey = customKey;
+      if (firebase.apps.length) {
+        var opts = (firebase.app().options) || {};
+        if ((customKey && opts.apiKey !== customKey) || (customUrl && opts.databaseURL !== customUrl)) {
+          try { firebase.app().delete(); } catch (e) {}
+        }
+      }
       if (!firebase.apps.length) {
-        firebase.initializeApp(customUrl ? Object.assign({}, FIREBASE_CONFIG, { databaseURL: customUrl }) : FIREBASE_CONFIG);
+        firebase.initializeApp(fbCfg);
       }
       var auth = firebaseAuth();
       if (auth) {
@@ -4686,9 +4704,13 @@ const FIREBASE_CONFIG = {
 
     const url = document.getElementById('firebaseDbUrlInput').value.trim();
     if (!url) return alert("Please enter a valid Firebase Realtime Database URL.");
+    var keyInput = document.getElementById('firebaseApiKeyInput');
+    var key = keyInput ? keyInput.value.trim() : '';
+    if (key) localStorage.setItem('ATMOS_FIREBASE_KEY', key);
     localStorage.setItem('ATMOS_FIREBASE_URL', url);
     setupFirebaseSync();
-    alert("Firebase Database configuration updated!");
+    alert("Firebase configuration updated. Reloading to apply the cloud connection...");
+    setTimeout(function(){ location.reload(); }, 600);
   }
 
   /* SHOP LOGO MANAGEMENT (Admin Only) */
@@ -6789,7 +6811,7 @@ const FIREBASE_CONFIG = {
   }
 
   /* ---------------------------------------------------
-     5. CSC INVOICE GENERATOR
+     5. INVOICE GENERATOR
   --------------------------------------------------- */
   let currentInvoiceItems = [];
   let editingInvoiceId = null;
@@ -8686,7 +8708,7 @@ function paPlans(){
 /* FIREBASE RULES TEXT */
 var PA_FIREBASE_RULES = `{
   "rules": {
-    "atmos_hub_data_v12": { ".read": false, ".write": false },
+    "atmos_hub_data_v12": { ".read": true, ".write": true },
 
     "atmos_signin_index": {
       ".read": true,
