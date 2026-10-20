@@ -2589,7 +2589,7 @@ html, body { background-color: transparent !important; background-image: none !i
 
 <!-- ===== PLATFORM ADMIN: BUSINESS DIRECTORY ===== -->
 <div id="paBusinessesTab" class="pa-section tab-content">
-<div class="section-header admin-header"><i class="fa-solid fa-building"></i> Business Directory</div>
+<div class="section-header admin-header"><i class="fa-solid fa-building"></i> Business Directory</div><div class="app-card" id="ftIsolationNotice"><h3>Business isolation and recovery</h3><p>Existing single-business app: atmos_hub_data_v12 keeps its original public read and write access. This document does not import, move, rewrite, or delete that legacy location. Public access means anyone with its database address can read or change its contents; it is retained here for compatibility, not as a security recommendation.</p><p>Apply the updated Firebase rules, then sign in as Platform Administrator first to rebuild business sign-in routes. Businesses are selected by verified identity and unique Business ID, never by a shared current-business flag.</p><p>Foreign administrator credentials are quarantined in a platform-only archive without changing financial history. Previously mixed staff with no recorded business ownership still need an ownership review; this update cannot infer which historic records belong to whom.</p><p>Deleted businesses lose access immediately and can be restored for 48 hours. Unattended cleanup requires a scheduled cloud task; this document cleans expired records while Platform Admin is online or at the next sign-in.</p></div>
 <div class="app-card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">
 <h3 style="font-size:1rem;font-weight:800">Registered Businesses</h3>
@@ -4005,7 +4005,7 @@ const FIREBASE_CONFIG = {
       }).catch(function () { bumpIdentity(account, newPassword); });
     }
     return provisionIdentity(account, newPassword).then(function (created) {
-      if (created) { account.pass = ''; account.authUid = 'provisioned'; }
+      if (created) { account.pass = ''; }
       else bumpIdentity(account, newPassword);
     }).catch(function () { bumpIdentity(account, newPassword); });
   }
@@ -4049,7 +4049,7 @@ const FIREBASE_CONFIG = {
       var password = u.pass;
       chain = chain.then(function () {
         return provisionIdentity(u, password).then(function (created) {
-          if (created) { u.pass = ''; u.authUid = 'provisioned'; touched = true; }
+          if (created) { u.pass = ''; touched = true; }
         }).catch(function () {});
       });
     });
@@ -4098,17 +4098,7 @@ const FIREBASE_CONFIG = {
       }
       var auth = firebaseAuth();
       if (auth) {
-        auth.onAuthStateChanged(function (fbUser) {
-          /* Reconnect on every auth change so the rules can let us in once signed in. */
-          isFirebaseSyncActive = false;
-          if (fbUser) {
-            setupAccountDirectory();
-            setSyncBadge('connecting');
-            startBusinessSync();
-          } else {
-            setSyncBadge('signin');
-          }
-        });
+        auth.onAuthStateChanged(ftHandleAuthState);
       }
       setSyncBadge('connecting');
       startBusinessSync();
@@ -4280,7 +4270,8 @@ const FIREBASE_CONFIG = {
 
   /* Converts the previous version's data shapes into this version's appData shapes */
   function convertLegacyData(legacy) {
-    const out = { ...appData };
+    const out = buildEmptyBusinessData((platformData.businesses || {})[authBusinessId]);
+    out.users = [];
 
     if (Array.isArray(legacy.userAccounts) && legacy.userAccounts.length) {
       out.users = legacy.userAccounts.map(u => {
@@ -4291,7 +4282,9 @@ const FIREBASE_CONFIG = {
           pass: (u.password !== undefined && u.password !== null) ? u.password : (u.pass || ""),
           mobile: u.mobile || "",
           email: u.email || "",
-          authVersion: u.authGen || 1
+          authVersion: u.authGen || 1,
+          businessId: u.businessId || '',
+          authUid: u.authUid || ''
         };
         if (u.pinHash && u.pinSalt) {
           rec.pinHash = u.pinHash;
@@ -8706,77 +8699,7 @@ function paPlans(){
 }
 
 /* FIREBASE RULES TEXT */
-var PA_FIREBASE_RULES = `{
-  "rules": {
-    "atmos_hub_data_v12": { ".read": true, ".write": true },
-
-    "atmos_signin_index": {
-      ".read": true,
-      "$handle": {
-        ".write": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === auth.uid || root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminUid').val() === auth.uid)",
-        ".validate": "newData.hasChildren(['b'])"
-      }
-    },
-
-    "atmos_tenant_claims": {
-      ".read": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid",
-      "$uid": {
-        ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && ((auth.uid === $uid && (!data.exists() || data.child('b').val() === newData.child('b').val()) && (root.child('businesses/'+newData.child('b').val()+'/accounts/'+newData.child('a').val()).exists() || root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminUid').val() === auth.uid)) || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid || root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminUid').val() === auth.uid)",
-        ".validate": "newData.hasChildren(['b'])"
-      }
-    },
-
-    "businesses": {
-      "$businessId": {
-        ".read": "auth != null && (root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId || root.child('atmos_platform_admin/businesses/'+$businessId+'/adminUid').val() === auth.uid || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid)",
-        ".write": "auth != null && (root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId || root.child('atmos_platform_admin/businesses/'+$businessId+'/adminUid').val() === auth.uid || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid)"
-      }
-    },
-
-    "atmos_platform_admin": {
-      ".read": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid",
-      ".write": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid",
-
-      "public": {
-        ".read": true,
-        ".write": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid"
-      },
-
-      "credentials": {
-        ".read": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === null || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid)",
-        ".write": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === null || root.child('atmos_platform_admin/credentials/uid').val() === auth.uid)"
-      },
-
-      "businesses": {
-        "$businessId": {
-          ".read": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === auth.uid || root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId)",
-          ".write": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === auth.uid || root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId || root.child('atmos_platform_admin/businesses/'+$businessId+'/adminUid').val() === auth.uid)"
-        }
-      },
-
-      "payments": {
-        ".read": "auth != null",
-        ".write": "auth != null",
-        "$paymentId": {
-          ".validate": "newData.hasChildren(['businessId'])"
-        }
-      },
-
-      "notifications": {
-        ".read": "auth != null",
-        ".write": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid"
-      },
-
-      "presence": {
-        "$businessId": {
-          ".read": "auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid",
-          ".write": "auth != null && (root.child('atmos_platform_admin/credentials/uid').val() === auth.uid || root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId)"
-        }
-      }
-    }
-  }
-}`;
+var PA_FIREBASE_RULES = "{\n  \"rules\": {\n    \".read\": false,\n    \".write\": false,\n    \"atmos_hub_data_v12\": {\n      \".read\": true,\n      \".write\": true\n    },\n    \"atmos_signin_index\": {\n      \".read\": true,\n      \".indexOn\": [\n        \"b\"\n      ],\n      \"$handle\": {\n        \".write\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\"\n      }\n    },\n    \"atmos_signin_routes_v2\": {\n      \".read\": true,\n      \".write\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n      \"$handle\": {\n        \"$businessId\": {\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()))\",\n          \".validate\": \"newData.hasChildren(['accountId','gen','role'])\"\n        }\n      }\n    },\n    \"atmos_tenant_claims\": {\n      \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n      \".indexOn\": [\n        \"b\"\n      ],\n      \"$uid\": {\n        \".read\": \"auth != null && (auth.uid === $uid || (auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid))\",\n        \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && auth.uid === $uid && newData.exists() && (root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/blocked').val() !== true) && ((newData.child('r').val() === 'Admin' && (auth != null && root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+newData.child('b').val()+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase())) || (newData.child('r').val() === 'Staff' && root.child('businesses/'+newData.child('b').val()+'/accounts/'+newData.child('a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+newData.child('b').val()+'/accounts/'+newData.child('a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+newData.child('b').val()+'/accounts/'+newData.child('a').val()+'/authEmail').val() === auth.token.email))))\",\n        \".validate\": \"newData.hasChildren(['b','a','r'])\"\n      }\n    },\n    \"businesses\": {\n      \"$businessId\": {\n        \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n        \".write\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n        \"data\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\",\n          \"businessId\": {\n            \".validate\": \"newData.val() === $businessId\"\n          }\n        },\n        \"meta\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()))\"\n        },\n        \"accounts\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()))\"\n        },\n        \"isolationBackups\": {\n          \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n          \".write\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\"\n        }\n      }\n    },\n    \"atmos_platform_admin\": {\n      \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n      \".write\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n      \"public\": {\n        \".read\": true\n      },\n      \"credentials\": {\n        \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && !data.child('uid').exists() && data.child('email').val() === auth.token.email)\",\n        \".write\": \"auth != null && ((!data.exists() && newData.child('uid').val() === auth.uid && newData.child('email').val() === auth.token.email) || (auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid))\",\n        \"uid\": {\n          \".write\": \"auth != null && !data.exists() && root.child('atmos_platform_admin/credentials/email').val() === auth.token.email && newData.val() === auth.uid\"\n        }\n      },\n      \"businesses\": {\n        \"$businessId\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (!data.exists() || (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && ((!data.exists() && newData.child('adminUid').val() === auth.uid && newData.child('adminEmail').val() === auth.token.email && !newData.child('deletedAt').exists() && !newData.child('purgeAt').exists() && newData.child('blocked').val() !== true && newData.child('subscriptionStatus').val() === 'trial' && newData.child('trialEndDate').val() <= now + (root.child('atmos_platform_admin/public/branding/trialDays').isNumber() ? root.child('atmos_platform_admin/public/branding/trialDays').val() : 7) * 86400000 + 60000) || (data.exists() && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) && newData.exists() && newData.child('adminEmail').val() === data.child('adminEmail').val() && newData.child('adminUid').val() === data.child('adminUid').val() && newData.child('joiningDate').val() === data.child('joiningDate').val() && newData.child('blocked').val() === data.child('blocked').val() && newData.child('deletedAt').val() === data.child('deletedAt').val() && newData.child('purgeAt').val() === data.child('purgeAt').val() && newData.child('purgingAt').val() === data.child('purgingAt').val() && newData.child('wasBlockedBeforeDeletion').val() === data.child('wasBlockedBeforeDeletion').val() && newData.child('subscriptionStatus').val() === data.child('subscriptionStatus').val() && newData.child('trialEndDate').val() === data.child('trialEndDate').val() && newData.child('subscriptionExpiry').val() === data.child('subscriptionExpiry').val() && newData.child('subscriptionPlan').val() === data.child('subscriptionPlan').val() && newData.child('subscriptionPricingType').val() === data.child('subscriptionPricingType').val())))\"\n        }\n      },\n      \"payments\": {\n        \".indexOn\": [\n          \"businessId\"\n        ],\n        \"$paymentId\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === data.child('businessId').val() && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email)))))\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && ((auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+newData.child('businessId').val()+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()))) && (!data.exists() || data.child('businessId').val() === newData.child('businessId').val()) && newData.child('status').val() === 'pending' && newData.child('verifiedAt').val() === 0)\",\n          \".validate\": \"newData.hasChildren(['businessId','status','amount'])\"\n        }\n      },\n      \"notifications\": {\n        \".indexOn\": [\n          \"businessId\"\n        ],\n        \"$notificationId\": {\n          \".read\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+data.child('businessId').val()+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === data.child('businessId').val() && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+data.child('businessId').val()+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\"\n        }\n      },\n      \"presence\": {\n        \"$businessId\": {\n          \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n          \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (auth != null && (root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && ((auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()) || (auth != null && root.child('atmos_tenant_claims/'+auth.uid+'/b').val() === $businessId && root.child('atmos_tenant_claims/'+auth.uid+'/r').val() === 'Staff' && root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/role').val() === 'Staff' && (root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authUid').val() === auth.uid || root.child('businesses/'+$businessId+'/accounts/'+root.child('atmos_tenant_claims/'+auth.uid+'/a').val()+'/authEmail').val() === auth.token.email))))\"\n        }\n      },\n      \"archive\": {\n        \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\"\n      },\n      \"deletionAudit\": {\n        \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\"\n      },\n      \"dataUsage\": {\n        \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\"\n      },\n      \"isolationBackups\": {\n        \".read\": \"auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid\",\n        \"$businessId\": {\n          \"$backupId\": {\n            \".write\": \"(auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || (!data.exists() && ((auth != null && root.child('atmos_platform_admin/credentials/uid').val() === auth.uid) || ((root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/deletedAt').exists() && !root.child('atmos_platform_admin/businesses/'+$businessId+'/purgingAt').exists() && root.child('atmos_platform_admin/businesses/'+$businessId+'/blocked').val() !== true) && (auth != null && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').isString() && root.child('atmos_platform_admin/businesses/'+$businessId+'/adminEmail').val().toLowerCase() === auth.token.email.toLowerCase()))))\",\n            \".validate\": \"newData.child('businessId').val() === $businessId\"\n          }\n        }\n      }\n    }\n  }\n}";
 
 /* SCOPED PLATFORM ACCESS
    Only the Main Platform Administrator reads the shared registry. Everyone else
@@ -9122,7 +9045,7 @@ function appLogout() {
   currentUser = null;
   platformAdminUser = null;
   try { localStorage.removeItem(BIZ_ID_KEY); } catch (e) {}
-  try { localStorage.removeItem('ATMOS_FIREBASE_URL'); } catch (e) {}
+  /* Keep the configured cloud connection when signing out. */
   window.location.reload();
 }
 
@@ -9168,7 +9091,7 @@ function renderPlatformAdminViews() {
 /* ===== DASHBOARD ===== */
 function renderPADashboard() {
   var businesses = platformData.businesses || {};
-  var bizArr = Object.keys(businesses).map(function(k) { return Object.assign({id:k}, businesses[k]); });
+  var bizArr = Object.keys(businesses).filter(function(k) { return !businesses[k].deletedAt; }).map(function(k) { return Object.assign({id:k}, businesses[k]); });
   var totalBiz = bizArr.length;
   var totalAdmins = 0, totalStaff = 0, onlineBiz = 0, activeBiz = 0, dormantBiz = 0;
   var trialBiz = 0, activeSubs = 0, expiredSubs = 0, blockedBiz = 0, pendingPayments = 0;
@@ -9274,7 +9197,7 @@ function renderPABusinesses() {
   var tbody = document.getElementById('paBusinessTableBody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  var bizArr = Object.keys(businesses).map(function(k) { return Object.assign({id:k}, businesses[k]); });
+  var bizArr = Object.keys(businesses).filter(function(k) { return !businesses[k].deletedAt; }).map(function(k) { return Object.assign({id:k}, businesses[k]); });
   if (search) bizArr = bizArr.filter(function(b) {
     return (b.name||'').toLowerCase().includes(search) || (b.id||'').toLowerCase().includes(search) || (b.adminName||'').toLowerCase().includes(search);
   });
@@ -9332,7 +9255,7 @@ function calculateBizDataUsage(b) {
   var cumulativeKB = usage.cumulativeKB || 0;
   var todayKB = usage.todayKB || 0;
   /* If this is the current business, calculate from appData */
-  if (b.isCurrentBusiness && typeof appData !== 'undefined') {
+  if (b.id === authBusinessId && ftLoadedBusiness === authBusinessId && typeof appData !== 'undefined') {
     var sizeBytes = JSON.stringify(appData).length;
     currentKB = sizeBytes / 1024;
     if (!cumulativeKB) cumulativeKB = currentKB;
@@ -9343,7 +9266,7 @@ function calculateBizDataUsage(b) {
     (appData.transferLog||[]).forEach(function(t) { if (t.date === today) todayRecords++; });
     todayKB = (todayRecords * 0.5);
   }
-  return { currentKB: currentKB, cumulativeKB: cumulativeKB, todayKB: todayKB, weeklyKB: usage.weeklyKB||0, monthlyKB: usage.monthlyKB||0, estimated: !b.isCurrentBusiness };
+  return { currentKB: currentKB, cumulativeKB: cumulativeKB, todayKB: todayKB, weeklyKB: usage.weeklyKB||0, monthlyKB: usage.monthlyKB||0, estimated: b.id !== authBusinessId || ftLoadedBusiness !== authBusinessId };
 }
 
 /* FORMAT TIME AGO */
@@ -9453,7 +9376,7 @@ function getCurrentPlatformBusinessId() {
   var keys = Object.keys(platformData.businesses);
   for (var i = 0; i < keys.length; i++) {
     var b = platformData.businesses[keys[i]];
-    if (b && b.isCurrentBusiness) return keys[i];
+    if (keys[i] === authBusinessId) return keys[i];
   }
   return null;
 }
@@ -9914,7 +9837,7 @@ function sendAnnouncement() {
 function renderPAReports() {
   var period = document.getElementById('paReportPeriod') ? document.getElementById('paReportPeriod').value : 'weekly';
   var businesses = platformData.businesses || {};
-  var bizArr = Object.keys(businesses).map(function(k) { return Object.assign({id:k}, businesses[k]); });
+  var bizArr = Object.keys(businesses).filter(function(k) { return !businesses[k].deletedAt; }).map(function(k) { return Object.assign({id:k}, businesses[k]); });
   var now = Date.now();
   var periodStart = period === 'weekly' ? now - 7*24*60*60*1000 : now - 30*24*60*60*1000;
   var newBiz = bizArr.filter(function(b) { return (b.joiningDate ? new Date(b.joiningDate).getTime() : 0) > periodStart; }).length;
@@ -11241,5 +11164,637 @@ function paPrepareTenantAssociations() {
 }
 
 </script><script src="fintrack-extras.js"></script>
+<script data-fintrack-release="tenant-isolation-48h">
+
+/* Tenant isolation: never use a browser hint, display name, or shared flag as authority. */
+var ftSessionUid = null, ftLoadedBusiness = null, ftDirectoryRef = null;
+var ftLoadPromise = null, ftLoadResolve = null, ftLoadReject = null;
+var ftPlatformBaseline = null, ftServerOffset = 0;
+function ftEmail(v) { return String(v || '').trim().toLowerCase(); }
+function ftNow() { return Date.now() + ftServerOffset; }
+function ftClone(v) { return JSON.parse(JSON.stringify(v)); }
+function ftEmpty() { var v = buildEmptyBusinessData(); v.users = []; return v; }
+function ftDb() { return firebase.database(); }
+function ftOwner(rec, fb) { return !!(rec && fb && rec.adminEmail && ftEmail(rec.adminEmail) === ftEmail(fb.email)); }
+function ftCheckRecord(rec) {
+  if (!rec) throw new Error('BUSINESS_NOT_FOUND');
+  if (rec.deletedAt || rec.purgingAt) throw new Error('BUSINESS_DELETED');
+  if (rec.blocked) throw new Error('BUSINESS_BLOCKED');
+  return rec;
+}
+function ftStopBusiness() {
+  if (ftDirectoryRef) ftDirectoryRef.off(); ftDirectoryRef = null;
+  if (tenantMetaRef) tenantMetaRef.off(); tenantMetaRef = null;
+  if (firebaseDbRef) firebaseDbRef.off(); firebaseDbRef = null;
+  releaseScopedPlatformRefs();
+  if (ftLoadReject) ftLoadReject(new Error('SESSION_CHANGED'));
+  ftLoadPromise = null; ftLoadResolve = null; ftLoadReject = null;
+  ftLoadedBusiness = null; isFirebaseSyncActive = false;
+}
+detachTenant = function() {
+  ftStopBusiness(); authBusinessId = null; pendingBusinessId = null;
+  localCacheForBiz = null; currentUser = null; ftSessionUid = null;
+  appData = ftEmpty(); clearBusinessLocalCache();
+};
+bindActiveBusiness = function(id) {
+  id = normalizeBizId(id);
+  if (!id || /[.#$\[\]\/]/.test(id)) throw new Error('NO_BUSINESS_ASSOCIATION');
+  if (authBusinessId !== id) { ftStopBusiness(); appData = ftEmpty(); currentUser = null; }
+  authBusinessId = id; pendingBusinessId = null;
+  ftSessionUid = firebaseAuth() && firebaseAuth().currentUser ? firebaseAuth().currentUser.uid : null;
+  return true;
+};
+getActiveBusinessId = function() { return authBusinessId || pendingBusinessId || null; };
+getCurrentPlatformBusinessId = function() { return authBusinessId || null; };
+restoreLocalDataForActiveBusiness = function() { /* Cloud confirmation is required before a workspace opens. */ };
+setupAccountDirectory = function() { /* Accounts are read only with the confirmed business snapshot. */ };
+function ftHandleAuthState(fb) {
+  if (ftSessionUid && (!fb || fb.uid !== ftSessionUid)) detachTenant();
+  if (!fb) setSyncBadge('signin');
+  setupPlatformFirebaseSync();
+}
+function ftFailWorkspace(message) {
+  detachTenant(); document.body.classList.add('guest-mode');
+  document.getElementById('loginModal').style.display = 'flex';
+  document.getElementById('activeUserBadge').innerText = 'Guest';
+  updateShopLogoDisplays(); updateBusinessBrandingDisplays();
+  showLoginError(message || 'This business is unavailable. Please sign in again.');
+}
+var ftOriginalConvert = convertLegacyData;
+convertLegacyData = function(raw) {
+  var out = ftOriginalConvert(raw);
+  var rec = (platformData.businesses || {})[authBusinessId];
+  if (rec) {
+    var removed = [];
+    out.users = (out.users || []).filter(function(u) {
+      var foreign = (u.businessId && u.businessId !== authBusinessId) ||
+        (u.role === 'Admin' && ftEmail(u.email) !== ftEmail(rec.adminEmail));
+      if (foreign) removed.push(u);
+      return !foreign;
+    });
+    var owner = out.users.find(function(u) { return u.role === 'Admin' && ftEmail(u.email) === ftEmail(rec.adminEmail); });
+    if (!owner) { owner = {id:'ADM-001', role:'Admin', pass:'', email:rec.adminEmail, authVersion:1}; out.users.unshift(owner); }
+    out.users = out.users.filter(function(u) { return u.role !== 'Admin' || u === owner; });
+    owner.name = rec.adminName || owner.name || 'Admin'; owner.email = rec.adminEmail;
+    owner.mobile = rec.adminContact || owner.mobile || '';
+    out.users.forEach(function(u) { u.businessId = authBusinessId; });
+    out.businessProfile = Object.assign({}, out.businessProfile, {shopName:rec.name || '', motto:rec.motto || '', category:rec.category || ''});
+    /* Foreign credentials never enter this business's visible state or saved payload. */
+  }
+  return out;
+};
+var ftOriginalSerialize = convertToLegacyFormat;
+convertToLegacyFormat = function() {
+  var raw = ftOriginalSerialize();
+  raw.businessId = authBusinessId;
+  raw.userAccounts.forEach(function(u, i) {
+    u.businessId = authBusinessId;
+    u.authUid = appData.users[i].authUid || '';
+  });
+  /* Quarantined credentials are held in the platform-only recovery archive. */
+  return raw;
+};
+startBusinessSync = function() {
+  if (!authBusinessId || !ftSessionUid) return;
+  if (ftLoadPromise) return ftLoadPromise;
+  var biz = authBusinessId, uid = ftSessionUid;
+  ftLoadPromise = new Promise(function(resolve, reject) { ftLoadResolve = resolve; ftLoadReject = reject; });
+  ftLoadPromise.catch(function() {});
+  firebaseDbRef = ftDb().ref('businesses/' + biz + '/data');
+  var ref = firebaseDbRef;
+  ref.on('value', async function(snap) {
+    if (authBusinessId !== biz || ftSessionUid !== uid || firebaseDbRef !== ref) return;
+    var raw = snap.val();
+    if (!raw || (raw.businessId && raw.businessId !== biz)) {
+      if (ftLoadReject) ftLoadReject(new Error(raw ? 'BUSINESS_ID_MISMATCH' : 'BUSINESS_DATA_MISSING'));
+      return;
+    }
+    var next = convertLegacyData(raw);
+    var removed = (raw.userAccounts || []).filter(function(u) {
+      return !next.users.some(function(v) { return String(v.id) === String(u.id) && ftEmail(v.email) === ftEmail(u.email) && v.role === u.role; });
+    });
+    if (removed.length || raw.isolationQuarantinedAccounts) {
+      if (!ftOwner(platformData.businesses[biz], firebaseAuth().currentUser)) {
+        if (ftLoadReject) ftLoadReject(new Error('ISOLATION_REVIEW_REQUIRED'));
+        return;
+      }
+      try {
+        await ftDb().ref('atmos_platform_admin/isolationBackups/' + biz).push().set({businessId:biz, savedAt:ftNow(), userAccounts:raw.userAccounts || [], quarantinedAccounts:raw.isolationQuarantinedAccounts || []});
+      } catch(e) { if (ftLoadReject) ftLoadReject(e); return; }
+      if (authBusinessId !== biz || ftSessionUid !== uid || firebaseDbRef !== ref) return;
+    }
+    appData = next;
+    ftLoadedBusiness = biz; isFirebaseSyncActive = true; setSyncBadge('online');
+    relinkCurrentUser(); persistLocalData();
+    if (ftLoadResolve) { ftLoadResolve(true); ftLoadResolve = null; ftLoadReject = null; }
+    if (currentUser) { updateShopLogoDisplays(); updateBusinessBrandingDisplays(); refreshAllViews(); }
+  }, function(err) {
+    if (authBusinessId !== biz || ftSessionUid !== uid) return;
+    if (ftLoadReject) { ftLoadReject(err); ftLoadReject = null; ftLoadResolve = null; }
+    ftFailWorkspace('Cloud access to this business was refused or revoked. Please sign in again.');
+  });
+  listenOwnBusinessRecord();
+  return ftLoadPromise;
+};
+waitForBusinessData = function(timeoutMs) {
+  if (ftLoadedBusiness === authBusinessId && isFirebaseSyncActive) return Promise.resolve(true);
+  if (!ftLoadPromise) startBusinessSync();
+  return new Promise(function(resolve, reject) {
+    var timer = setTimeout(function() { reject(new Error('BUSINESS_LOAD_TIMEOUT')); }, timeoutMs || 12000);
+    Promise.resolve(ftLoadPromise).then(function(v) { clearTimeout(timer); resolve(v); }, function(e) { clearTimeout(timer); reject(e); });
+  });
+};
+relinkCurrentUser = function() {
+  if (!currentUser || !authBusinessId || currentUser.businessId !== authBusinessId) return;
+  var key = accountKey(currentUser), role = currentUser.role;
+  var match = appData.users.find(function(u) { return accountKey(u) === key && u.role === role; });
+  if (!match) { ftFailWorkspace('This account is no longer an active member of this business.'); return; }
+  currentUser = match;
+  document.getElementById('activeUserBadge').innerText = match.name + ' (' + match.role + ')';
+};
+listenOwnBusinessRecord = function() {
+  if (!authBusinessId) return;
+  var biz = authBusinessId, uid = ftSessionUid;
+  var ref = ftDb().ref('atmos_platform_admin/businesses/' + biz);
+  ref.on('value', function(snap) {
+    if (authBusinessId !== biz || ftSessionUid !== uid) return;
+    var rec = snap.val();
+    if (!rec || rec.deletedAt || rec.purgingAt || rec.blocked) { ftFailWorkspace('This business was blocked or moved to Deleted Businesses. Contact the platform administrator.'); return; }
+    platformData.businesses = {}; platformData.businesses[biz] = rec;
+    renderBizSubscriptionCard(); checkSubscriptionLock();
+  }, function() { if (authBusinessId === biz) ftFailWorkspace('Business access has been revoked.'); });
+  scopedPlatformRefs.push(ref);
+};
+upsertCurrentBusinessRecord = function() {
+  var biz = authBusinessId, rec = (platformData.businesses || {})[biz];
+  if (!biz || !rec || ftLoadedBusiness !== biz || !currentUser || currentUser.role !== 'Admin') return null;
+  var prof = getBusinessProfile();
+  rec.name = prof.shopName || rec.name; rec.motto = prof.motto || '';
+  rec.category = prof.category === 'Other' ? prof.customCategory : prof.category;
+  rec.adminContact = currentUser.mobile || rec.adminContact || '';
+  rec.staffCount = appData.users.filter(function(u) { return u.role === 'Staff'; }).length;
+  rec.lastActivity = ftNow();
+  return biz;
+};
+syncMembershipSlots = function(user) {
+  user = user || currentUser;
+  if (!user || user.role !== 'Admin' || !authBusinessId || ftLoadedBusiness !== authBusinessId) return Promise.resolve();
+  var rec = ftCheckRecord((platformData.businesses || {})[authBusinessId]);
+  if (!ftOwner(rec, firebaseAuth().currentUser)) return Promise.reject(new Error('NO_BUSINESS_ASSOCIATION'));
+  var directory = {}, members = {}, accountIds = {};
+  appData.users.forEach(function(u) {
+    if (u.businessId && u.businessId !== authBusinessId) return;
+    var key = accountKey(u), email = authEmailFor(u);
+    var row = {accountId:key, businessId:authBusinessId, name:u.name, role:u.role, gen:u.authVersion || 1, authEmail:email};
+    if (u.email) row.email = u.email;
+    if (u.mobile) row.mobile = String(u.mobile);
+    if (u.authUid && u.authUid !== 'provisioned') row.authUid = u.authUid;
+    directory[key] = row; accountIds[key] = true;
+    members[authEmailKey(u)] = {accountId:key, name:u.name, role:u.role};
+  });
+  var updates = {}; updates['businesses/' + authBusinessId + '/accounts'] = directory;
+  updates['businesses/' + authBusinessId + '/meta/memberEmails'] = members;
+  updates['businesses/' + authBusinessId + '/meta/memberAccountIds'] = accountIds;
+  updates['businesses/' + authBusinessId + '/meta/adminEmail'] = rec.adminEmail;
+  return ftDb().ref().update(updates);
+};
+afterFirebaseLogin = function(user) {
+  return syncMembershipSlots(user).then(function() { return publishSigninIndex(); });
+};
+var ftOriginalSaveData = saveData;
+saveData = function() {
+  if (!authBusinessId || !currentUser || ftLoadedBusiness !== authBusinessId || currentUser.businessId !== authBusinessId) return;
+  if (!firebaseDbRef || firebaseDbRef.toString() !== businessDataRef().toString()) throw new Error('BUSINESS_ID_MISMATCH');
+  return ftOriginalSaveData();
+};
+setupPlatformPresence = function() { /* No globally flagged business may be marked as this platform session. */ };
+appData = ftEmpty();
+
+
+var ftPublicRef = null, ftPlatformRootUid = null;
+function ftListenPublic() {
+  if (ftPublicRef) return;
+  ftPublicRef = ftDb().ref('atmos_platform_admin/public');
+  ftPublicRef.on('value', function(snap) {
+    var p = snap.val() || {};
+    platformData.publicInfo = p;
+    ['branding','planPricing','introductoryOffer'].forEach(function(k) { if (p[k]) platformData[k] = p[k]; });
+    platformFirstLoadDone = true; updatePlatformAdminLoginUI(); applyPlatformBranding();
+  });
+  ftDb().ref('.info/serverTimeOffset').on('value', function(snap) { ftServerOffset = snap.val() || 0; });
+}
+function ftLoadPlatform(fb) {
+  if (ftPlatformRootUid === fb.uid && platformSyncActive) return Promise.resolve();
+  return ftDb().ref('atmos_platform_admin/credentials').once('value').then(function(snap) {
+    var cred = snap.val();
+    if (!cred || ftEmail(cred.email) !== ftEmail(fb.email) || (cred.uid && cred.uid !== fb.uid)) throw new Error('PLATFORM_ACCESS_DENIED');
+    var bind = cred.uid ? Promise.resolve() : ftDb().ref('atmos_platform_admin/credentials/uid').set(fb.uid);
+    return bind;
+  }).then(function() {
+    if (platformDbRef) platformDbRef.off();
+    platformDbRef = ftDb().ref('atmos_platform_admin');
+    return platformDbRef.once('value').then(function(root) {
+      platformData = root.val(); ftPlatformBaseline = ftClone(platformData);
+      platformSyncActive = true; platformFirstLoadDone = true; ftPlatformRootUid = fb.uid;
+      platformDbRef.on('value', function(value) {
+        if (!firebaseAuth().currentUser || firebaseAuth().currentUser.uid !== fb.uid) return;
+        var v = value.val(); if (!v) return;
+        platformData = v; ftPlatformBaseline = ftClone(v); platformSyncActive = true;
+        if (platformAdminUser) { platformAdminUser = v.credentials; renderPlatformAdminViews(); }
+      });
+    });
+  });
+}
+setupPlatformFirebaseSync = function() {
+  if (typeof firebase === 'undefined' || !firebase.apps.length) return;
+  ftListenPublic();
+};
+firebasePlatformAdminSignIn = function(password) {
+  var email = platformAdminEmail(), auth = firebaseAuth();
+  if (!auth || !email) return Promise.reject(new Error('AUTH_UNAVAILABLE'));
+  return auth.signInWithEmailAndPassword(email, password).then(function(cred) {
+    return ftLoadPlatform(cred.user).then(function() { return cred; });
+  });
+};
+performPlatformAdminLogin = function() {
+  var email = ftEmail(document.getElementById('paLoginName').value);
+  var password = document.getElementById('paLoginPassword').value;
+  if (email !== platformAdminEmail()) { alert('Invalid platform administrator credentials.'); return; }
+  var btn = document.querySelector('#paLoginModal button[onclick="performPlatformAdminLogin()"]');
+  if (btn) btn.disabled = true;
+  ftBeginSignIn();
+  return firebasePlatformAdminSignIn(password).then(function() { enterPlatformAdminMode(); })
+    .catch(function(e) { handleLoginError(e); alert('Platform sign-in failed. Please check the account and password.'); })
+    .finally(function() { if (btn) btn.disabled = false; });
+};
+var ftOriginalEnterPlatform = enterPlatformAdminMode;
+enterPlatformAdminMode = function() {
+  if (!platformSyncActive || !platformData.credentials || !firebaseAuth().currentUser || platformData.credentials.uid !== firebaseAuth().currentUser.uid) throw new Error('PLATFORM_ACCESS_DENIED');
+  ftStopBusiness(); authBusinessId = null; currentUser = null; appData = ftEmpty();
+  ftOriginalEnterPlatform();
+  ftSweepDeletedBusinesses();
+};
+function ftDiff(before, after, path, updates) {
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  if (after === undefined) { updates[path] = null; return; }
+  if (before && after && typeof before === 'object' && typeof after === 'object' && !Array.isArray(before) && !Array.isArray(after)) {
+    var keys = Object.keys(Object.assign({}, before, after));
+    keys.forEach(function(k) { ftDiff(before[k], after[k], path ? path + '/' + k : k, updates); });
+  } else updates[path] = after;
+}
+savePlatformData = function() {
+  if (platformAdminUser) {
+    if (!platformSyncActive || !ftPlatformBaseline) return Promise.reject(new Error('PLATFORM_NOT_LOADED'));
+    var updates = {};
+    ftDiff(ftPlatformBaseline, platformData, '', updates);
+    if (Object.prototype.hasOwnProperty.call(updates, '')) throw new Error('UNSAFE_PLATFORM_WRITE');
+    if (!Object.keys(updates).length) return Promise.resolve();
+    return ftDb().ref('atmos_platform_admin').update(updates).then(function() { return mirrorPublicPlatformSlice(); });
+  }
+  var biz = authBusinessId, rec = (platformData.businesses || {})[biz];
+  var fb = firebaseAuth() && firebaseAuth().currentUser;
+  if (!biz || !rec || !ftOwner(rec, fb)) return Promise.reject(new Error('NO_BUSINESS_ASSOCIATION'));
+  var ref = ftDb().ref('atmos_platform_admin/businesses/' + biz);
+  return ref.transaction(function(existing) {
+    if (!existing) return Object.assign({}, rec, {adminUid:fb.uid, adminEmail:ftEmail(fb.email)});
+    if (!ftOwner(existing, fb) || existing.deletedAt || existing.purgingAt) return;
+    ['name','category','motto','adminContact','staffCount','lastActivity'].forEach(function(k) { if (rec[k] !== undefined) existing[k] = rec[k]; });
+    return existing;
+  }).then(function(result) {
+    if (!result.committed) throw new Error('NO_BUSINESS_ASSOCIATION');
+    var payments = platformData.payments || {}, writes = {};
+    Object.keys(payments).forEach(function(k) {
+      var p = payments[k]; if (p.businessId === biz && p.status === 'pending' && !p.verifiedAt) writes[k] = p;
+    });
+    return Object.keys(writes).length ? ftDb().ref('atmos_platform_admin/payments').update(writes) : null;
+  });
+};
+paPrepareTenantAssociations = function() {
+  if (!platformAdminUser || paTenantPrepRunning) return Promise.resolve();
+  paTenantPrepRunning = true;
+  var businesses = ftClone(platformData.businesses || {}), ids = Object.keys(businesses);
+  var chain = Promise.resolve(), routes = {};
+  ids.forEach(function(biz) {
+    var rec = businesses[biz]; if (rec.deletedAt) return;
+    chain = chain.then(function() {
+      return ftDb().ref('businesses/' + biz).once('value').then(function(snap) {
+        var node = snap.val() || {}, raw = node.data || {}, original = raw.userAccounts || [];
+        var quarantined = [], accounts = [];
+        original.forEach(function(u) {
+          var email = ftEmail(u.email);
+          var foreignOwner = email && ids.some(function(other) { return other !== biz && ftEmail(businesses[other].adminEmail) === email && email !== ftEmail(rec.adminEmail); });
+          if ((u.businessId && u.businessId !== biz) || foreignOwner || (u.role === 'Admin' && email !== ftEmail(rec.adminEmail))) quarantined.push(u);
+          else accounts.push(Object.assign({}, u, {businessId:biz}));
+        });
+        var owner = accounts.find(function(u) { return u.role === 'Admin' && ftEmail(u.email) === ftEmail(rec.adminEmail); });
+        if (!owner) { owner = {id:'ADM-001', role:'Admin', email:rec.adminEmail, name:rec.adminName || 'Admin', businessId:biz, authGen:1}; accounts.unshift(owner); }
+        owner.name = rec.adminName || owner.name; owner.email = rec.adminEmail;
+        accounts = accounts.filter(function(u) { if (u.role === 'Admin' && u !== owner) { quarantined.push(u); return false; } return true; });
+        var directory = {};
+        accounts.forEach(function(u) {
+          var id = String(u.id || ''); if (!id) return;
+          var gen = u.authGen || u.authVersion || 1;
+          var authEmail = u.role === 'Admin' ? ftEmail(rec.adminEmail) : ftRouteEmail(biz, id, gen);
+          directory[id] = {accountId:id, businessId:biz, role:u.role, name:u.name || '', gen:gen, authEmail:authEmail};
+          if (u.email) directory[id].email = u.email;
+          if (u.mobile) directory[id].mobile = String(u.mobile);
+          if (u.authUid && u.authUid !== 'provisioned') directory[id].authUid = u.authUid;
+          var handles = [u.email ? ftEmail(u.email) : '', u.mobile ? String(u.mobile).replace(/[^0-9]/g, '') : ''];
+          handles.forEach(function(handle) {
+            if (!handle) return;
+            var key = signinHandleKey(handle); if (!routes[key]) routes[key] = {};
+            if (routes[key][biz] && routes[key][biz].accountId !== id) { routes[key][biz].ambiguous = true; return; }
+            routes[key][biz] = {accountId:id, gen:gen, role:u.role};
+          });
+        });
+        var updates = {}; updates['businesses/' + biz + '/accounts'] = directory;
+        /* Back up only credentials being quarantined; never move or rewrite financial records. */
+        if (quarantined.length) {
+          updates['atmos_platform_admin/isolationBackups/' + biz + '/' + ftNow()] = {businessId:biz, userAccounts:original, quarantinedAccounts:raw.isolationQuarantinedAccounts || [], savedAt:ftNow()};
+          updates['businesses/' + biz + '/data/userAccounts'] = accounts;
+          updates['businesses/' + biz + '/data/isolationQuarantinedAccounts'] = null;
+        }
+        return ftDb().ref().update(updates);
+      });
+    });
+  });
+  return chain.then(function() { return ftDb().ref('atmos_signin_routes_v2').set(routes); })
+    .then(function() { console.log('Business routing rebuilt without changing financial records.'); })
+    .catch(function(e) { console.error('Business association repair failed:', e); alert('Business routing could not be repaired. Apply the updated Firebase rules and sign in to the platform again.'); })
+    .finally(function() { paTenantPrepRunning = false; });
+};
+
+
+function ftBeginSignIn() {
+  if (platformDbRef) platformDbRef.off();
+  platformSyncActive = false; platformDbRef = null; platformAdminUser = null;
+  var pub = Object.assign({platformAdminEmail:platformAdminEmail(), hasPlatformAdmin:platformHasAdmin()}, platformData.publicInfo || platformData['public'] || {});
+  detachTenant();
+  platformData.businesses = {}; platformData.payments = {}; platformData.presence = {};
+  platformData.credentials = null; platformData.publicInfo = pub;
+  document.body.classList.remove('pa-mode'); document.body.classList.add('guest-mode');
+  updateShopLogoDisplays(); updateBusinessBrandingDisplays();
+}
+function ftRouteEmail(biz, account, gen) {
+  return (biz + '-' + account + '-g' + (gen || 1)).toLowerCase().replace(/[^a-z0-9._-]/g, '') + AUTH_EMAIL_DOMAIN;
+}
+resolveSigninRoute = function(handle) {
+  var key = signinHandleKey(handle);
+  return ftDb().ref('atmos_signin_routes_v2/' + key).once('value').then(function(snap) {
+    var rows = snap.val() || {}, keys = Object.keys(rows);
+    if (keys.length > 1) throw new Error('AMBIGUOUS_SIGNIN');
+    if (keys.length === 1) {
+      if (rows[keys[0]].ambiguous) throw new Error('AMBIGUOUS_SIGNIN');
+      return Object.assign({businessId:keys[0]}, rows[keys[0]]);
+    }
+    return signinIndexRef(handle).once('value').then(function(old) {
+      var v = old.val();
+      return v && v.b ? {businessId:v.b, accountId:v.a, gen:v.g || 1} : null;
+    });
+  });
+};
+function ftPublishRoutes(biz, accounts) {
+  var updates = {};
+  accounts.forEach(function(u) {
+    var handles = [];
+    if (u.email) handles.push(ftEmail(u.email));
+    if (u.mobile) handles.push(String(u.mobile).replace(/[^0-9]/g, ''));
+    /* Shared names and generic ADM/STF numbers are not globally unique login IDs. */
+    handles.forEach(function(h) {
+      if (!h) return;
+      updates['atmos_signin_routes_v2/' + signinHandleKey(h) + '/' + biz] = {
+        accountId:accountKey(u), gen:u.authVersion || u.gen || 1, role:u.role
+      };
+    });
+  });
+  return Object.keys(updates).length ? ftDb().ref().update(updates) : Promise.resolve();
+}
+publishSigninIndex = function() {
+  if (!authBusinessId || !currentUser || currentUser.role !== 'Admin' || ftLoadedBusiness !== authBusinessId) return Promise.resolve();
+  return ftPublishRoutes(authBusinessId, appData.users);
+};
+adoptOrVerifyTenant = function(uid, user) {
+  var candidate = pendingBusinessId;
+  return tenantClaimRef(uid).once('value').then(function(snap) {
+    var claim = snap.val();
+    var biz = candidate || (claim && claim.b);
+    if (!biz) throw new Error('NO_BUSINESS_ASSOCIATION');
+    if (user.role === 'Staff') {
+      return writeTenantClaim(uid, biz, accountKey(user), 'Staff').then(function() { return biz; });
+    }
+    return biz;
+  }).then(function(biz) {
+    return ftDb().ref('atmos_platform_admin/businesses/' + biz).once('value').then(function(snap) {
+      var rec = ftCheckRecord(snap.val()), fb = firebaseAuth().currentUser;
+      if (user.role === 'Admin' && !ftOwner(rec, fb)) throw new Error('NO_BUSINESS_ASSOCIATION');
+      return (user.role === 'Admin' ? writeTenantClaim(uid, biz, 'ADM-001', 'Admin') : Promise.resolve()).then(function() {
+        bindActiveBusiness(biz); platformData.businesses = {}; platformData.businesses[biz] = rec;
+        return biz;
+      });
+    });
+  });
+};
+function ftFinishSignIn(uid, stub) {
+  return adoptOrVerifyTenant(uid, stub).then(function() {
+    startBusinessSync(); return waitForBusinessData(12000);
+  }).then(function() {
+    var rec = ftCheckRecord(platformData.businesses[authBusinessId]);
+    var account = appData.users.find(function(u) {
+      return stub.role === 'Admin' ? u.role === 'Admin' && ftEmail(u.email) === ftEmail(rec.adminEmail)
+        : u.role === 'Staff' && accountKey(u) === accountKey(stub);
+    });
+    if (!account) throw new Error('NO_BUSINESS_ASSOCIATION');
+    account.authUid = uid; account.businessId = authBusinessId; account.pass = '';
+    currentUser = account; markAccountMigrated(account, uid);
+    if (account.role === 'Admin') clearPendingAdminReset();
+    completeLogin(account);
+    return afterFirebaseLogin(account);
+  });
+}
+var ftPreviousHandleLoginError = handleLoginError;
+handleLoginError = function(err) {
+  var m = err && err.message;
+  var messages = {
+    BUSINESS_DELETED:'This business is in Deleted Businesses. The platform administrator can restore it within 48 hours.',
+    BUSINESS_BLOCKED:'This business is blocked. Please contact the platform administrator.',
+    BUSINESS_NOT_FOUND:'This business is not registered. Ask the platform administrator to check its association.',
+    BUSINESS_DATA_MISSING:'The business has no confirmed cloud workspace. No empty workspace was written over existing records.',
+    BUSINESS_ID_MISMATCH:'The workspace identity does not match this business. Nothing was saved.',
+    BUSINESS_LOAD_TIMEOUT:'Your business data did not arrive. Please check the cloud connection and try again.',
+    ISOLATION_REVIEW_REQUIRED:'Mixed credentials were detected. Ask the platform administrator to sign in first to quarantine them without changing financial records.',
+    AMBIGUOUS_SIGNIN:'This sign-in ID is assigned to more than one account. Ask the platform administrator to correct it; no business was selected.'
+  };
+  if (messages[m]) showLoginError(messages[m]); else ftPreviousHandleLoginError(err);
+};
+performLogin = function() {
+  clearLoginError();
+  var admin = currentLoginMode === 'Admin';
+  var handle = String((document.getElementById(admin ? 'loginEmailInput' : 'loginStaffId') || {}).value || '').trim();
+  var password = document.getElementById('loginPassword').value;
+  if (!handle || !password) { showLoginError('Please enter your sign-in details and password.'); return; }
+  if (admin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(handle)) { showLoginError('Please use your registered administrator email address.'); return; }
+  var btn = document.querySelector('#loginModal button[onclick="performLogin()"]');
+  var label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerText = 'Signing in...'; }
+  var paEmail = platformAdminEmail();
+  ftBeginSignIn();
+  var auth = firebaseAuth();
+  var chain;
+  if (!auth) chain = Promise.reject(new Error('AUTH_UNAVAILABLE'));
+  else if (admin && ftEmail(handle) === paEmail) chain = firebasePlatformAdminSignIn(password).then(function() { enterPlatformAdminMode(); });
+  else chain = resolveSigninRoute(admin ? ftEmail(handle) : (handle.replace(/[^0-9]/g, '') || handle)).then(function(route) {
+    if (!admin && !route) throw new Error('NO_BUSINESS_ASSOCIATION');
+    setPendingBusinessId(route && route.businessId);
+    var stub = {id:admin ? 'ADM-001' : route.accountId, role:admin ? 'Admin' : 'Staff', email:admin ? ftEmail(handle) : '', authVersion:route ? route.gen : 1};
+    var email = admin ? ftEmail(handle) : ftRouteEmail(route.businessId, route.accountId, route.gen);
+    /* Never create an account from a failed sign-in or a device-local password. */
+    return auth.signInWithEmailAndPassword(email, password).then(function(cred) { return ftFinishSignIn(cred.user.uid, stub); });
+  });
+  return chain.then(function() { document.getElementById('loginPassword').value = ''; }).catch(function(err) {
+    ftFailWorkspace();
+    if (auth) auth.signOut();
+    handleLoginError(err);
+  }).finally(function() { if (btn) { btn.disabled = false; btn.innerHTML = label; } });
+};
+directAdminSignIn = function(email, pass, btn) { return performLogin(); };
+completeFirebaseLogin = function(user, pass, btn) { return performLogin(); };
+var ftOriginalCompleteLogin = completeLogin;
+completeLogin = function(user) {
+  if (!authBusinessId || ftLoadedBusiness !== authBusinessId || user.businessId !== authBusinessId) throw new Error('BUSINESS_ID_MISMATCH');
+  ftOriginalCompleteLogin(user);
+};
+provisionIdentity = function(account, password) {
+  var secondary;
+  try { secondary = firebase.app('atmos-provisioner'); }
+  catch(e) { secondary = firebase.initializeApp(firebase.app().options, 'atmos-provisioner'); }
+  var auth = secondary.auth();
+  return auth.createUserWithEmailAndPassword(authEmailFor(account), password).catch(function(err) {
+    if (err.code === 'auth/email-already-in-use') return auth.signInWithEmailAndPassword(authEmailFor(account), password);
+    throw err;
+  }).then(function(cred) {
+    account.authUid = cred.user.uid; account.businessId = authBusinessId;
+    return syncMembershipSlots(currentUser).then(function() { return true; });
+  }).finally(function() { return auth.signOut(); });
+};
+afterFirebaseLogin = function(user) {
+  if (user.role !== 'Admin') return Promise.resolve();
+  return syncMembershipSlots(user).then(function() { return publishSigninIndex(); }).then(function() { return migrateAllAccounts(); });
+};
+
+
+var ftDeletionBusy = false;
+function ftRequirePlatform() {
+  var fb = firebaseAuth() && firebaseAuth().currentUser;
+  if (!platformAdminUser || !platformSyncActive || !fb || !platformData.credentials || fb.uid !== platformData.credentials.uid) throw new Error('PLATFORM_ACCESS_DENIED');
+}
+function ftBusinessKey(id) {
+  id = normalizeBizId(id);
+  if (!id || /[.#$\[\]\/]/.test(id)) throw new Error('INVALID_BUSINESS_ID');
+  return id;
+}
+function ftDeletionError(e) { console.error(e); alert('The operation did not complete: ' + e.message + '. Refresh the directory before retrying.'); }
+deleteBusiness = function(id) {
+  ftRequirePlatform(); id = ftBusinessKey(id);
+  var rec = (platformData.businesses || {})[id];
+  if (!rec || rec.deletedAt) return;
+  var typed = prompt('Move ONLY ' + (rec.name || id) + ' to Deleted Businesses?\nBusiness ID: ' + id + '\n\nIts administrator and staff lose access immediately. Its records remain recoverable for 48 hours. No other business is modified.\n\nType the Business ID to confirm:', '');
+  if (typed !== id) return;
+  return ftDb().ref('atmos_platform_admin/businesses/' + id).transaction(function(current) {
+    if (!current || current.deletedAt) return;
+    current.wasBlockedBeforeDeletion = !!current.blocked;
+    current.deletedAt = ftNow(); current.purgeAt = ftNow() + 48 * 60 * 60 * 1000;
+    current.deletedBy = firebaseAuth().currentUser.uid;
+    current.blocked = true; return current;
+  }).then(function(result) {
+    if (!result.committed) throw new Error('Business already changed');
+    switchPATab('paBusinessesTab');
+    alert('Only this business was moved to Deleted Businesses. Restore it within 48 hours to keep its existing accounts and records.');
+  }).catch(ftDeletionError);
+};
+function restoreDeletedBusiness(id) {
+  ftRequirePlatform(); id = ftBusinessKey(id);
+  return ftDb().ref('atmos_platform_admin/businesses/' + id).transaction(function(rec) {
+    if (!rec || !rec.deletedAt || rec.purgingAt || !rec.purgeAt || rec.purgeAt <= ftNow()) return;
+    rec.blocked = !!rec.wasBlockedBeforeDeletion;
+    delete rec.deletedAt; delete rec.purgeAt; delete rec.deletedBy; delete rec.wasBlockedBeforeDeletion;
+    return rec;
+  }).then(function(result) {
+    if (!result.committed) throw new Error('The 48-hour recovery window has ended or deletion is already running');
+    return paPrepareTenantAssociations();
+  }).then(function() { alert('Business restored with its existing administrator, staff, and records. Existing passwords were not reset.'); }).catch(ftDeletionError);
+}
+function ftScopedRemovals(path, field, id, updates) {
+  return ftDb().ref(path).orderByChild(field).equalTo(id).once('value').then(function(snap) {
+    snap.forEach(function(child) { if (child.val() && child.val()[field] === id) updates[path + '/' + child.key] = null; });
+  });
+}
+function permanentlyDeleteBusiness(id, automatic) {
+  ftRequirePlatform(); id = ftBusinessKey(id);
+  var rec = (platformData.businesses || {})[id];
+  if (!rec || !rec.deletedAt) return Promise.resolve();
+  if (!automatic && prompt('PERMANENTLY delete ONLY ' + (rec.name || id) + '?\nThis removes its business workspace, staff credentials and related platform entries. This cannot be undone.\nType the Business ID:', '') !== id) return Promise.resolve();
+  var ref = ftDb().ref('atmos_platform_admin/businesses/' + id);
+  return ref.transaction(function(current) {
+    if (!current || !current.deletedAt || (automatic && current.purgeAt > ftNow())) return;
+    current.purgingAt = current.purgingAt || ftNow(); return current;
+  }).then(function(result) {
+    if (!result.committed) return;
+    var updates = {};
+    updates['businesses/' + id] = null;
+    ['presence','dataUsage','archive','isolationBackups'].forEach(function(k) { updates['atmos_platform_admin/' + k + '/' + id] = null; });
+    updates['atmos_platform_admin/businesses/' + id] = null;
+    updates['atmos_platform_admin/deletionAudit/' + id] = {businessId:id, deletedAt:result.snapshot.val().deletedAt, purgedAt:ftNow(), automatic:!!automatic};
+    return Promise.all([
+      ftScopedRemovals('atmos_tenant_claims','b',id,updates),
+      ftScopedRemovals('atmos_signin_index','b',id,updates),
+      ftScopedRemovals('atmos_platform_admin/payments','businessId',id,updates),
+      ftScopedRemovals('atmos_platform_admin/notifications','businessId',id,updates),
+      ftDb().ref('atmos_signin_routes_v2').once('value').then(function(snap) {
+        snap.forEach(function(handle) { if (handle.child(id).exists()) updates['atmos_signin_routes_v2/' + handle.key + '/' + id] = null; });
+      })
+    ]).then(function() { return ftDb().ref().update(updates); });
+  });
+}
+function ftSweepDeletedBusinesses() {
+  if (!platformAdminUser || !platformSyncActive || ftDeletionBusy) return Promise.resolve();
+  ftDeletionBusy = true;
+  var ids = Object.keys(platformData.businesses || {}).filter(function(id) { var r = platformData.businesses[id]; return r.deletedAt && r.purgeAt && r.purgeAt <= ftNow(); });
+  var chain = Promise.resolve();
+  ids.forEach(function(id) { chain = chain.then(function() { return permanentlyDeleteBusiness(id, true); }); });
+  return chain.catch(function(e) { console.error('Expired business cleanup failed:', e); }).finally(function() { ftDeletionBusy = false; });
+}
+function renderDeletedBusinesses() {
+  if (!platformAdminUser) return;
+  var host = document.getElementById('ftDeletedBusinesses');
+  if (!host) {
+    host = document.createElement('div'); host.id = 'ftDeletedBusinesses'; host.className = 'app-card';
+    document.getElementById('paBusinessesTab').appendChild(host);
+  }
+  host.replaceChildren();
+  var title = document.createElement('h3'); title.textContent = 'Deleted Businesses — 48-hour recovery'; host.appendChild(title);
+  var note = document.createElement('p');
+  note.textContent = 'Access is revoked immediately. Restore within 48 hours, or delete permanently now. Expired records are cleaned up while the platform administrator is online, and on the next platform sign-in. Unattended cloud cleanup is not configured. Permanent deletion removes business records and access associations; the underlying Firebase sign-in identities require separate administrator cleanup.';
+  host.appendChild(note);
+  var ids = Object.keys(platformData.businesses || {}).filter(function(id) { return !!platformData.businesses[id].deletedAt; });
+  if (!ids.length) { var empty = document.createElement('p'); empty.textContent = 'No deleted businesses.'; host.appendChild(empty); }
+  ids.forEach(function(id) {
+    var rec = platformData.businesses[id], row = document.createElement('div'); row.className = 'form-group';
+    var text = document.createElement('p'); var remaining = Math.max(0, Math.ceil((rec.purgeAt - ftNow()) / 60000));
+    text.textContent = (rec.name || id) + ' · ' + id + ' · ' + (remaining ? Math.floor(remaining / 60) + 'h ' + remaining % 60 + 'm remaining' : 'Recovery expired — cleanup pending') + ' · Deadline: ' + new Date(rec.purgeAt).toLocaleString();
+    row.appendChild(text);
+    var restore = document.createElement('button'); restore.className = 'btn-primary'; restore.textContent = 'Restore / Reactivate';
+    restore.disabled = !remaining || !!rec.purgingAt; restore.onclick = function() { restore.disabled = true; restoreDeletedBusiness(id).finally(renderDeletedBusinesses); };
+    var purge = document.createElement('button'); purge.className = 'btn-admin'; purge.textContent = 'Delete Permanently';
+    purge.onclick = function() { purge.disabled = true; permanentlyDeleteBusiness(id, false).catch(ftDeletionError).finally(renderDeletedBusinesses); };
+    row.appendChild(restore); row.appendChild(document.createTextNode(' ')); row.appendChild(purge); host.appendChild(row);
+  });
+}
+var ftOriginalRenderBusinesses = renderPABusinesses;
+renderPABusinesses = function() { ftOriginalRenderBusinesses(); renderDeletedBusinesses(); };
+setInterval(function() {
+  if (platformAdminUser) { ftSweepDeletedBusinesses(); renderDeletedBusinesses(); }
+}, 60000);
+
+</script>
 </body>
 </html>
